@@ -1,8 +1,20 @@
-import abc
+import logging
 import uuid
+from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from sys import prefix
 from typing import Any, Dict, List, Optional
+from urllib.request import urlopen
 
 import requests
+from requests import Response
+
+from utils import time_me
+
+logging.basicConfig(level="ERROR")
+logger = logging.getLogger(__name__)
+
+BUFFER_SIZE = 1024
 
 
 class ImageDownloaderException(Exception):
@@ -10,33 +22,94 @@ class ImageDownloaderException(Exception):
         super().__init__(message)
 
 
-class ImageDownloader:
-    def __init__(self, folder_path: str, api_url: str, api_key: str):
-        self.folder_path = folder_path
-        self.api_url = api_url
-        self.api_key = api_key
-
-    @abc.abstractmethod
-    def get_image_data(self, query: str) -> Optional[Dict[str, Any]]:
-        ...
-
-    @abc.abstractmethod
+class IImageDownloader(ABC):
+    @abstractmethod
     def get_image_urls(data: Dict[str, Any], number_of_urls: int) -> List[str]:
         ...
 
-    def download_and_save_image(self, url: str, prefix: str = "") -> None:
+    @abstractmethod
+    def get_image_data(self, query: List[str]) -> Optional[Dict[str, Any]]:
+        ...
+
+    @abstractmethod
+    def build_request_params(self, query: List[str]):
+        ...
+
+    @abstractmethod
+    def build_query(self, query: List[str]) -> str:
+        ...
+
+    @abstractmethod
+    def download_and_save_images(self, urls: List[str], prefix: str = "") -> None:
+        ...
+
+    @abstractmethod
+    def create_file_name(self, string: str, prefix: str = "") -> str:
+        ...
+
+
+class ImageDownloader(IImageDownloader):
+    query_separator = " "
+    api_url = ""
+
+    def __init__(self, folder_path: str, api_key: str):
+        self.folder_path = folder_path
+        self.api_key = api_key
+
+    def get_image_data(self, query: List[str]) -> Optional[Dict[str, Any]]:
+        image_data = None
+        try:
+            response = requests.get(
+                f"{self.api_url}", **self.build_request_params(query)
+            )
+            if response.ok:
+                image_data = response.json()
+            else:
+                raise ImageDownloaderException(
+                    f"Something went wrong. Status_code {response.status_code}."
+                )
+        except Exception as err:
+            logger.error(f"Error in time of get_images_data: {err}.")
+        else:
+            return image_data
+
+    def build_request_params(self, query: List[str]):
+        return {"params": {"query": self.build_query(query)}}
+
+    def build_query(self, query: List[str]) -> str:
+        joined_query = self.query_separator.join(query)
+        return joined_query
+
+    def download_and_save_images(self, url: str, prefix: str = "") -> None:
         try:
             response = requests.get(url, stream=True)
-            if response.status_code == 200:
-                filename = self.create_file_name(url, prefix)
-                with open(f"{self.folder_path}{filename}", "wb") as f:
-                    for chunk in response:
-                        f.write(chunk)
+            filename = self.create_file_name(response.request.url, prefix)
+            with open(f"{self.folder_path}{filename}", "wb") as f:
+                for data in response.iter_content(BUFFER_SIZE):
+                    f.write(data)
         except Exception as err:
-            print("Error!", err)
+            logger.error(f"Error if time of downloading and saving image: {err}.")
+        else:
+            logger.info(f"Image {filename} saved successfuly.")
 
-    def create_file_name(self, string: str, prefix: str = ""):
-        filename = uuid.uuid4()
+    @time_me
+    def download_and_save_images_with_threads(
+        self, urls: List[str], prefix: str = ""
+    ) -> None:
+        with ThreadPoolExecutor(10) as pool:
+            pool.map(
+                self.download_and_save_images, urls, [prefix for _ in range(len(urls))]
+            )
+
+    @time_me
+    def download_and_save_images_normal(
+        self, urls: List[str], prefix: str = ""
+    ) -> None:
+        for url in urls:
+            self.download_and_save_images(url, prefix)
+
+    def create_file_name(self, string: str, prefix: str = "") -> str:
+        filename = uuid.uuid4().hex
         file_extension = string.split(".")[-1]
         full_name = (
             f"{prefix}_{filename}.{file_extension}"
@@ -47,21 +120,11 @@ class ImageDownloader:
 
 
 class PixabayImageDownloader(ImageDownloader):
-    def get_image_data(self, query: str) -> Optional[Dict[str, Any]]:
-        params = {"key": self.api_key, "q": query}  # check with manual url with +
-        image_data = None
-        try:
-            response = requests.get(f"{self.api_url}", params=params)
-            if response.ok:
-                image_data = response.json()
-            else:
-                raise ImageDownloaderException(
-                    f"Something went wrong. Status_code {response.status_code}."
-                )
-        except Exception as err:
-            print("Error!", err)
-        else:
-            return image_data
+    query_separator = "+"
+    api_url = "https://pixabay.com/api/"
+
+    def build_request_params(self, query: List[str]):
+        return {"params": {"key": self.api_key, "q": self.build_query(query)}}
 
     @staticmethod
     def get_image_urls(data: Dict[str, Any], number_of_urls: int) -> List[str]:
@@ -76,22 +139,12 @@ class PixabayImageDownloader(ImageDownloader):
 
 
 class PexelsImageDownloader(ImageDownloader):
-    def get_image_data(self, query: str) -> Optional[Dict[str, Any]]:
+    api_url = "https://api.pexels.com/v1/search"
+
+    def build_request_params(self, query: List[str]):
         headers = {"Authorization": self.api_key}
-        params = {"query": query}
-        image_data = None
-        try:
-            response = requests.get(f"{self.api_url}", params=params, headers=headers)
-            if response.ok:
-                image_data = response.json()
-            else:
-                raise ImageDownloaderException(
-                    f"Something went wrong. Status_code {response.status_code}."
-                )
-        except Exception as err:
-            print("Error!", err)
-        else:
-            return image_data
+        params = {"query": self.build_query(query)}
+        return {"headers": headers, "params": params}
 
     @staticmethod
     def get_image_urls(data: Dict[str, Any], number_of_urls: int) -> List[str]:
