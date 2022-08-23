@@ -7,6 +7,7 @@
 # where -a - query for REST API; -n - number of photos to donwload may be by defaut 1
 # --save-to - folder where to save downloaded photos
 # --source  - a source for uploading images(possible choices: pexels, pixabay)
+#  python3 cli_tool_3.py -q ferrari -n 10 --source pixabay  --save-to ~/work/sergei/mentoring/cli_tool/images/
 
 import argparse
 import os
@@ -14,6 +15,7 @@ import os
 from dotenv import load_dotenv
 
 from image_downloader import PexelsImageDownloader, PixabayImageDownloader
+from utils import progress_bar
 
 load_dotenv()
 
@@ -42,5 +44,14 @@ if __name__ == "__main__":
     if image_urls:
         name_prefix = f"{args.source}_" + "_".join(args.q)
 
-        image_downloader.download_and_save_images_with_threads(image_urls, name_prefix)
-        image_downloader.download_and_save_images_normal(image_urls, name_prefix)
+        # image_downloader.download_and_save_images_with_threads(image_urls, name_prefix)
+        # image_downloader.download_and_save_images_normal(image_urls, name_prefix)
+        # image_downloader.download_and_save_images_with_progress_bar(image_urls, name_prefix)
+        image_downloader.download_and_save_images_with_progress_bar_2(
+            image_urls, name_prefix
+        )
+        # for i in range(1000, 3000):
+        #     import time; time.sleep(0.001)
+        #     progress_bar(i, 3000)
+    print()
+    print("Done")
